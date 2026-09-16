@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Monitor Mix</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #14161a;
+    color: #eee;
+    -webkit-tap-highlight-color: transparent;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: #1d2026;
+    position: sticky;
+    top: 0;
+  }
+  header h1 { font-size: 1.1rem; margin: 0; flex: 1; }
+  button.back {
+    background: none;
+    border: 1px solid #444;
+    color: #eee;
+    border-radius: 8px;
+    padding: 0.5rem 0.9rem;
+    font-size: 1rem;
+  }
+  #status { padding: 0.5rem 1rem; color: #888; font-size: 0.85rem; }
+  #trackList { list-style: none; margin: 0; padding: 0.5rem; }
+  #trackList li button {
+    width: 100%;
+    text-align: left;
+    padding: 1rem;
+    margin: 0.25rem 0;
+    font-size: 1.1rem;
+    background: #22262e;
+    color: #eee;
+    border: none;
+    border-radius: 10px;
+  }
+  #trackList li button:active { background: #2c313b; }
+  #receives { padding: 0.5rem 1rem; }
+  .receive-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 0.25rem 1rem;
+    padding: 0.9rem 0;
+    border-bottom: 1px solid #262a31;
+  }
+  .receive-row .name { font-size: 1rem; grid-column: 1; }
+  .receive-row .value { font-size: 0.85rem; color: #9aa; grid-column: 2; text-align: right; }
+  .receive-row input[type=range] {
+    grid-column: 1 / span 2;
+    width: 100%;
+    height: 2.2rem;
+    accent-color: #5aa9ff;
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <button class="back" id="backBtn" hidden>&larr;</button>
+  <h1 id="title">Monitor Mix</h1>
+</header>
+<div id="status"></div>
+
+<ul id="trackList"></ul>
+
+<div id="receives" hidden>
+  <div id="receiveRows"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var state = { tracks: [], selected: null, receives: [] };
+  var autoAdoptSelected = true; // adopt REAPER's current selection once on load, then stop
+  var interacting = new Set();
+  var lastSent = new Map();
+  var SEND_INTERVAL_MS = 50;
+
+  var trackListEl = document.getElementById("trackList");
+  var receivesEl = document.getElementById("receives");
+  var receiveRowsEl = document.getElementById("receiveRows");
+  var titleEl = document.getElementById("title");
+  var backBtn = document.getElementById("backBtn");
+  var statusEl = document.getElementById("status");
+
+  function trackName(index) {
+    var t = state.tracks.find(function (t) { return t.index === index; });
+    return t ? t.name : ("Track " + index);
+  }
+
+  function render() {
+    var onFaders = state.selected !== null;
+    trackListEl.hidden = onFaders;
+    receivesEl.hidden = !onFaders;
+    backBtn.hidden = !onFaders;
+    titleEl.textContent = onFaders ? trackName(state.selected) : "Monitor Mix";
+
+    if (!onFaders) {
+      trackListEl.innerHTML = "";
+      state.tracks.forEach(function (t) {
+        var li = document.createElement("li");
+        var btn = document.createElement("button");
+        btn.textContent = t.name;
+        btn.addEventListener("click", function () { selectTrack(t.index); });
+        li.appendChild(btn);
+        trackListEl.appendChild(li);
+      });
+      if (state.tracks.length === 0) {
+        statusEl.textContent = "Waiting for track list from REAPER...";
+      } else {
+        statusEl.textContent = "";
+      }
+      return;
+    }
+
+    if (state.receives.length === 0) {
+      statusEl.textContent = "Waiting for receives from REAPER...";
+    } else {
+      statusEl.textContent = "";
+    }
+
+    state.receives.forEach(function (r) {
+      var row = receiveRowsEl.querySelector('[data-index="' + r.index + '"]');
+      if (!row) {
+        row = document.createElement("div");
+        row.className = "receive-row";
+        row.dataset.index = r.index;
+        row.innerHTML =
+          '<div class="name"></div><div class="value"></div>' +
+          '<input type="range" min="0" max="1" step="0.001">';
+        var input = row.querySelector("input");
+        input.addEventListener("input", function () {
+          interacting.add(r.index);
+          maybeSendVolume(r.index, parseFloat(input.value));
+        });
+        ["pointerup", "mouseup", "touchend", "touchcancel"].forEach(function (evt) {
+          input.addEventListener(evt, function () {
+            sendVolume(r.index, parseFloat(input.value));
+            interacting.delete(r.index);
+          });
+        });
+        receiveRowsEl.appendChild(row);
+      }
+      row.querySelector(".name").textContent = r.name || ("Receive " + (r.index + 1));
+      row.querySelector(".value").textContent = r.volume_str || "";
+      if (!interacting.has(r.index)) {
+        row.querySelector("input").value = r.volume;
+      }
+    });
+
+    // Drop rows for receives that disappeared (e.g. after switching tracks).
+    Array.prototype.slice.call(receiveRowsEl.children).forEach(function (row) {
+      var idx = parseInt(row.dataset.index, 10);
+      if (!state.receives.some(function (r) { return r.index === idx; })) {
+        row.remove();
+      }
+    });
+  }
+
+  function maybeSendVolume(index, value) {
+    var now = Date.now();
+    var last = lastSent.get(index) || 0;
+    if (now - last >= SEND_INTERVAL_MS) {
+      sendVolume(index, value);
+    }
+  }
+
+  function sendVolume(index, value) {
+    lastSent.set(index, Date.now());
+    fetch("/api/receive/volume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index: index, value: value }),
+    });
+  }
+
+  function selectTrack(index) {
+    state.selected = index;
+    state.receives = [];
+    receiveRowsEl.innerHTML = "";
+    render();
+    fetch("/api/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index: index }),
+    });
+  }
+
+  backBtn.addEventListener("click", function () {
+    state.selected = null;
+    state.receives = [];
+    autoAdoptSelected = false;
+    receiveRowsEl.innerHTML = "";
+    render();
+  });
+
+  function connect() {
+    var es = new EventSource("/api/events");
+    es.onmessage = function (ev) {
+      var msg = JSON.parse(ev.data);
+      if (msg.type === "tracks") state.tracks = msg.tracks;
+      else if (msg.type === "selected") {
+        if (autoAdoptSelected && state.selected === null) state.selected = msg.selected;
+      } else if (msg.type === "receives") state.receives = msg.receives;
+      render();
+    };
+    es.onerror = function () {
+      statusEl.textContent = "Disconnected, retrying...";
+    };
+  }
+
+  render();
+  connect();
+})();
+</script>
+</body>
+</html>

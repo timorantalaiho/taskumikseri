@@ -1,0 +1,13 @@
+# REAPER auxiliary files that shouldn't be versioned alongside the script
+*.reapeaks
+*-bak*.RPP
+*.RPP-bak
+*.RPP~
+*.reaperUndo
+
+# Local assistant tool config, not part of the deliverable
+.claude/
+
+# Python bytecode cache from running bridge/
+__pycache__/
+*.pyc
