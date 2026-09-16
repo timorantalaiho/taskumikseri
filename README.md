@@ -89,3 +89,7 @@ send parameters. Plain track volume/pan/mute/solo/record-arm for the bus
 track itself is already covered by REAPER's own built-in Web Remote
 (Preferences > Control/OSC/web > Add... > Web browser interface) and needs
 no part of this repo.
+
+## License
+
+GNU General Public License v3.0 -- see [LICENSE](LICENSE).
