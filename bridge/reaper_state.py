@@ -1,20 +1,37 @@
 """REAPER-facing half of the bridge: OSC I/O and shared, lock-guarded state.
 
-Talks to REAPER's OSC control surface (Preferences > Control/OSC/web). Track
-names/selection use REAPER's absolute track addressing; receive name/volume
-use REAPER's "currently selected track" addressing, which is why selecting a
-track and reading its receives are two separate steps.
+Talks to REAPER's OSC control surface (Preferences > Control/OSC/web).
+Track/receive addresses are all of the form `/track/<n>/...` and
+`/track/<n>/recv/<i>/...`, where `<n>` is a slot in REAPER's OSC "track
+bank" (which defaults to only 8 tracks and 4 receives visible at once,
+per REAPER's Default.ReaperOSC). Rather than page through banks, we just
+tell REAPER's OSC device to raise those limits on connect via
+`/device/track/count` and `/device/receive/count` (documented in
+Default.ReaperOSC as overridable at runtime), so `<n>` lines up with the
+real track/receive number for any project this bridge is likely to see.
 """
 
 import queue
+import re
 import socket
 import threading
+import time
 
 import osc
 
+# REAPER pads OSC feedback for track/receive slots beyond what actually
+# exists in the project with generic placeholder names in this exact shape
+# (mirroring how it displays an unnamed real track/receive in its own UI,
+# which is the one case this can't distinguish from a real item).
+_PLACEHOLDER_TRACK_NAME = re.compile(r"^Track \d+$")
+_PLACEHOLDER_RECV_NAME = re.compile(r"^Recv \d+$")
+
+REFRESH_ALL_SURFACES_ACTION = 41743
+
 
 class ReaperState:
-    def __init__(self, reaper_host, reaper_port, listen_host="0.0.0.0", listen_port=9000):
+    def __init__(self, reaper_host, reaper_port, listen_host="0.0.0.0", listen_port=9000,
+                 max_tracks=128, max_receives=64):
         self.reaper_addr = (reaper_host, reaper_port)
 
         self._lock = threading.Lock()
@@ -29,6 +46,21 @@ class ReaperState:
         self._running = True
         self._thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._thread.start()
+
+        # Raise REAPER's default OSC bank limits (8 tracks, 4 receives) so
+        # every track/receive is addressable without paging through banks.
+        # REAPER otherwise only sends feedback for what *changed*, so an
+        # already-running REAPER won't re-announce tracks it told a
+        # previous OSC listener about before this process started -- force
+        # a full resend via "Refresh all surfaces". One resend right after
+        # widening the bank can race REAPER applying the new size, so we
+        # nudge it twice.
+        self._send("/device/track/count", int(max_tracks))
+        self._send("/device/receive/count", int(max_receives))
+        time.sleep(0.3)
+        self._send("/action", REFRESH_ALL_SURFACES_ACTION)
+        time.sleep(0.5)
+        self._send("/action", REFRESH_ALL_SURFACES_ACTION)
 
     def close(self):
         self._running = False
@@ -67,19 +99,33 @@ class ReaperState:
                         self._receives = {}
                     changed = "selected"
 
-            elif len(parts) >= 4 and parts[0] == "track" and parts[1] == "recv" and parts[2].isdigit():
-                idx = int(parts[2])
-                field = parts[3]
-                entry = self._receives.setdefault(idx, {"name": "", "volume": 0.0, "volume_str": ""})
-                if field == "name" and args:
-                    entry["name"] = str(args[0])
-                    changed = "receives"
-                elif field == "volume" and len(parts) == 4 and args:
-                    entry["volume"] = float(args[0])
-                    changed = "receives"
-                elif field == "volume" and len(parts) == 5 and parts[4] == "str" and args:
-                    entry["volume_str"] = str(args[0])
-                    changed = "receives"
+            else:
+                # Receives can come addressed either relative to the
+                # selected track (/track/recv/<i>/...) or fully-qualified
+                # (/track/<n>/recv/<i>/...) -- REAPER's default config uses
+                # the latter, but accept both.
+                recv_track, recv_fields = None, None
+                if len(parts) >= 4 and parts[0] == "track" and parts[1] == "recv" and parts[2].isdigit():
+                    recv_track = self._selected_track
+                    recv_fields = parts[2:]
+                elif (len(parts) >= 5 and parts[0] == "track" and parts[1].isdigit()
+                        and parts[2] == "recv" and parts[3].isdigit()):
+                    recv_track = int(parts[1])
+                    recv_fields = parts[3:]
+
+                if recv_track is not None and recv_track == self._selected_track:
+                    idx = int(recv_fields[0])
+                    field = recv_fields[1] if len(recv_fields) > 1 else None
+                    entry = self._receives.setdefault(idx, {"name": "", "volume": 0.0, "volume_str": ""})
+                    if field == "name" and args:
+                        entry["name"] = str(args[0])
+                        changed = "receives"
+                    elif field == "volume" and len(recv_fields) == 2 and args:
+                        entry["volume"] = float(args[0])
+                        changed = "receives"
+                    elif field == "volume" and len(recv_fields) == 3 and recv_fields[2] == "str" and args:
+                        entry["volume_str"] = str(args[0])
+                        changed = "receives"
 
         if changed:
             self._publish(changed)
@@ -100,16 +146,21 @@ class ReaperState:
     def set_receive_volume(self, index, value):
         value = max(0.0, min(1.0, float(value)))
         with self._lock:
+            track = self._selected_track
             entry = self._receives.setdefault(index, {"name": "", "volume": value, "volume_str": ""})
             entry["volume"] = value
         self._publish("receives")
-        self._send(f"/track/recv/{index}/volume", value)
+        if track is not None:
+            self._send(f"/track/{track}/recv/{index}/volume", value)
+        else:
+            self._send(f"/track/recv/{index}/volume", value)
 
     # -- Read access ---------------------------------------------------
 
     def get_tracks(self):
         with self._lock:
-            return [{"index": i, "name": n} for i, n in sorted(self._tracks.items())]
+            items = sorted(self._tracks.items())
+        return [{"index": i, "name": n} for i, n in items if not _PLACEHOLDER_TRACK_NAME.match(n)]
 
     def get_selected(self):
         with self._lock:
@@ -117,7 +168,8 @@ class ReaperState:
 
     def get_receives(self):
         with self._lock:
-            return [{"index": i, **v} for i, v in sorted(self._receives.items())]
+            items = sorted(self._receives.items())
+        return [{"index": i, **v} for i, v in items if not _PLACEHOLDER_RECV_NAME.match(v["name"])]
 
     # -- Pub/sub for SSE -------------------------------------------------
 

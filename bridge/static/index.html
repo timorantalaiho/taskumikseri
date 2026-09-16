@@ -154,7 +154,7 @@
         });
         receiveRowsEl.appendChild(row);
       }
-      row.querySelector(".name").textContent = r.name || ("Receive " + (r.index + 1));
+      row.querySelector(".name").textContent = r.name || ("Receive " + r.index);
       row.querySelector(".value").textContent = r.volume_str || "";
       if (!interacting.has(r.index)) {
         row.querySelector("input").value = r.volume;

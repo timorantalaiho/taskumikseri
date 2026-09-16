@@ -36,13 +36,13 @@ Do this once per machine, in **Preferences > Control/OSC/web**.
 3. Set the **feedback IP/port** to the machine and port the bridge listens
    on (`--listen-port` below, default `9000`; use `127.0.0.1` if the bridge
    runs on the same machine as REAPER).
-4. Raise the device's **track/channel count** (bank size) to cover every
-   track in your project. By default OSC surfaces only address 8 tracks at
-   a time and need a bank-switch to reach the rest; a project with more
-   than 8 tracks needs this raised so every track name/receive streams
-   without banking. The exact field name for this varies by REAPER version
-   -- look for wording like "tracks" or "channels" in the same Add dialog.
-5. Make sure the device is enabled (not just added).
+4. Make sure the device is enabled (not just added).
+
+REAPER's OSC surfaces only address 8 tracks and 4 receives per track at a
+time by default (`DEVICE_TRACK_COUNT`/`DEVICE_RECEIVE_COUNT` in
+`Default.ReaperOSC`) -- the bridge raises both limits itself on startup via
+OSC (`/device/track/count`, `/device/receive/count`), so there's nothing to
+configure for that.
 
 ## Run the bridge
 
@@ -71,8 +71,12 @@ and with REAPER itself.
 - **Web UI shows no tracks**: confirm the bridge's `--listen-port` matches
   the feedback port configured in REAPER's OSC device, and that the OSC
   device is enabled (not just added) in Preferences.
-- **Only some tracks/receives show up**: raise the OSC device's
-  track/channel count (bank size) -- see "Set up REAPER's OSC device" above.
+- **Track list or receives are incomplete right after starting the
+  bridge**: REAPER only sends feedback for what changed, so an
+  already-running REAPER won't re-announce tracks it already told a
+  previous OSC listener about. The bridge asks REAPER to resend everything
+  on startup, which can take a couple of seconds for a large project --
+  give it a moment and reload the page.
 - **Sliders don't move REAPER's levels**: confirm the bridge's
   `--reaper-host`/`--reaper-port` match REAPER's OSC device's listen
   address, and that phone and computer are on the same network with no
