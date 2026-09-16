@@ -80,7 +80,14 @@ and with REAPER itself.
 - **Sliders don't move REAPER's levels**: confirm the bridge's
   `--reaper-host`/`--reaper-port` match REAPER's OSC device's listen
   address, and that phone and computer are on the same network with no
-  firewall blocking the chosen ports.
+  firewall blocking the chosen ports. Run the bridge with `--debug` to log
+  the actual OSC traffic it sends/receives for select and receive-volume
+  messages.
+- **Nothing responds at all, even after the above checks pass**: if REAPER's
+  OSC device was ever flooded (e.g. a bug that hammered it with requests),
+  it can end up in a stuck state that only REAPER itself can clear -- toggle
+  the OSC device off and back on in Preferences (or restart REAPER), then
+  restart the bridge.
 
 ## Notes on scope
 

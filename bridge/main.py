@@ -25,9 +25,11 @@ def main():
                          help="Interface to serve the web UI on (default: 0.0.0.0)")
     parser.add_argument("--http-port", type=int, default=8090,
                          help="Port to serve the web UI on (default: 8090)")
+    parser.add_argument("--debug", action="store_true",
+                         help="Log select/receive OSC traffic to stdout")
     args = parser.parse_args()
 
-    state = ReaperState(args.reaper_host, args.reaper_port, listen_port=args.listen_port)
+    state = ReaperState(args.reaper_host, args.reaper_port, listen_port=args.listen_port, debug=args.debug)
 
     httpd = ThreadingHTTPServer((args.http_host, args.http_port), Handler)
     httpd.reaper_state = state

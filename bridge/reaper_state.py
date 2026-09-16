@@ -9,6 +9,22 @@ tell REAPER's OSC device to raise those limits on connect via
 `/device/track/count` and `/device/receive/count` (documented in
 Default.ReaperOSC as overridable at runtime), so `<n>` lines up with the
 real track/receive number for any project this bridge is likely to see.
+
+Every control message here is a single fire-and-forget UDP packet with no
+ack, and REAPER only sends feedback for *changes* -- so if a select/refresh
+packet is ever lost, our local state can silently drift from REAPER's
+actual state (a slider then "moves" a track REAPER never really selected).
+
+"Refresh all surfaces" (the only way to force REAPER to resend state it
+doesn't think changed) redumps its *entire* OSC surface -- every field for
+every banked track, not just what we use -- so it's expensive. A continuous
+heartbeat that fired it on a timer was tried and made things *worse*: it
+kept re-triggering that large dump before the previous one had drained,
+flooding REAPER's OSC output and causing real packet loss, which looked
+stale, which triggered another refresh -- a self-sustaining storm. Instead,
+recovery is bounded and targeted: a short retry sequence after startup (for
+the track list) and after each select_track() call (for that track's
+receives), each stopping as soon as the data it's waiting for shows up.
 """
 
 import queue
@@ -27,12 +43,16 @@ _PLACEHOLDER_TRACK_NAME = re.compile(r"^Track \d+$")
 _PLACEHOLDER_RECV_NAME = re.compile(r"^Recv \d+$")
 
 REFRESH_ALL_SURFACES_ACTION = 41743
+RETRY_DELAYS = (0.4, 1.0, 2.0)  # bounded backoff for post-action recovery
 
 
 class ReaperState:
     def __init__(self, reaper_host, reaper_port, listen_host="0.0.0.0", listen_port=9000,
-                 max_tracks=128, max_receives=64):
+                 max_tracks=64, max_receives=16, debug=False):
         self.reaper_addr = (reaper_host, reaper_port)
+        self.max_tracks = max_tracks
+        self.max_receives = max_receives
+        self.debug = debug
 
         self._lock = threading.Lock()
         self._tracks = {}  # index (1-based) -> name
@@ -49,18 +69,28 @@ class ReaperState:
 
         # Raise REAPER's default OSC bank limits (8 tracks, 4 receives) so
         # every track/receive is addressable without paging through banks.
-        # REAPER otherwise only sends feedback for what *changed*, so an
-        # already-running REAPER won't re-announce tracks it told a
-        # previous OSC listener about before this process started -- force
-        # a full resend via "Refresh all surfaces". One resend right after
-        # widening the bank can race REAPER applying the new size, so we
-        # nudge it twice.
         self._send("/device/track/count", int(max_tracks))
         self._send("/device/receive/count", int(max_receives))
-        time.sleep(0.3)
         self._send("/action", REFRESH_ALL_SURFACES_ACTION)
-        time.sleep(0.5)
+
+        threading.Thread(target=self._retry_while_missing,
+                          args=(lambda: bool(self._tracks), self._resync_tracks),
+                          daemon=True).start()
+
+    def _resync_tracks(self):
+        self._send("/device/track/count", int(self.max_tracks))
+        self._send("/device/receive/count", int(self.max_receives))
         self._send("/action", REFRESH_ALL_SURFACES_ACTION)
+
+    def _retry_while_missing(self, have_what_we_need, resync):
+        """Bounded backoff: stop as soon as have_what_we_need() is true."""
+        for delay in RETRY_DELAYS:
+            time.sleep(delay)
+            with self._lock:
+                done = have_what_we_need()
+            if done:
+                return
+            resync()
 
     def close(self):
         self._running = False
@@ -79,6 +109,8 @@ class ReaperState:
             except Exception:
                 continue
             for address, args in messages:
+                if self.debug and ("select" in address or "recv" in address):
+                    print(f"RECV {address} {args}", flush=True)
                 self._handle_message(address, args)
 
     def _handle_message(self, address, args):
@@ -133,6 +165,8 @@ class ReaperState:
     # -- OSC send ----------------------------------------------------------
 
     def _send(self, address, *args):
+        if self.debug and ("select" in address or "recv" in address):
+            print(f"SEND {address} {args}", flush=True)
         self._sock.sendto(osc.encode_message(address, *args), self.reaper_addr)
 
     def select_track(self, index):
@@ -142,6 +176,19 @@ class ReaperState:
         self._publish("selected")
         self._publish("receives")
         self._send(f"/track/{index}/select", 1.0)
+
+        def resync():
+            # Bail out if the user has since selected a different track --
+            # no point recovering receives nobody's looking at anymore.
+            with self._lock:
+                if self._selected_track != index:
+                    return
+            self._send(f"/track/{index}/select", 1.0)
+            self._send("/action", REFRESH_ALL_SURFACES_ACTION)
+
+        threading.Thread(target=self._retry_while_missing,
+                          args=(lambda: self._selected_track != index or bool(self._receives), resync),
+                          daemon=True).start()
 
     def set_receive_volume(self, index, value):
         value = max(0.0, min(1.0, float(value)))
