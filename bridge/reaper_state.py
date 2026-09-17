@@ -25,6 +25,11 @@ stale, which triggered another refresh -- a self-sustaining storm. Instead,
 recovery is bounded and targeted: a short retry sequence after startup (for
 the track list) and after each select_track() call (for that track's
 receives), each stopping as soon as the data it's waiting for shows up.
+
+Track color is the one piece of state this module doesn't get over OSC at
+all -- REAPER's OSC feedback never includes it, in any version. It's polled
+separately over REAPER's "Web browser interface" control surface instead
+(see webremote.py).
 """
 
 import queue
@@ -34,6 +39,7 @@ import threading
 import time
 
 import osc
+import webremote
 
 # REAPER pads OSC feedback for track/receive slots beyond what actually
 # exists in the project with generic placeholder names in this exact shape
@@ -44,20 +50,25 @@ _PLACEHOLDER_RECV_NAME = re.compile(r"^Recv \d+$")
 
 REFRESH_ALL_SURFACES_ACTION = 41743
 RETRY_DELAYS = (0.4, 1.0, 2.0)  # bounded backoff for post-action recovery
+WEBREMOTE_POLL_INTERVAL = 3.0  # track colors barely change; a slow poll is plenty
 
 
 class ReaperState:
     def __init__(self, reaper_host, reaper_port, listen_host="0.0.0.0", listen_port=9000,
-                 max_tracks=64, max_receives=16, debug=False):
+                 max_tracks=64, max_receives=16, debug=False,
+                 webremote_host=None, webremote_port=None):
         self.reaper_addr = (reaper_host, reaper_port)
         self.max_tracks = max_tracks
         self.max_receives = max_receives
         self.debug = debug
+        self.webremote_host = webremote_host
+        self.webremote_port = webremote_port
 
         self._lock = threading.Lock()
         self._tracks = {}  # index (1-based) -> name
         self._selected_track = None
         self._receives = {}  # index (0-based) -> {name, volume, volume_str}
+        self._colors = {}  # index (1-based) -> "#rrggbb", from the web-remote poll below
         self._subscribers = []  # list[queue.Queue]
 
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -77,6 +88,9 @@ class ReaperState:
                           args=(lambda: bool(self._tracks), self._resync_tracks),
                           daemon=True).start()
 
+        if self.webremote_port:
+            threading.Thread(target=self._poll_colors, daemon=True).start()
+
     def _resync_tracks(self):
         self._send("/device/track/count", int(self.max_tracks))
         self._send("/device/receive/count", int(self.max_receives))
@@ -95,6 +109,24 @@ class ReaperState:
     def close(self):
         self._running = False
         self._sock.close()
+
+    def _poll_colors(self):
+        # Track color isn't part of REAPER's OSC feedback at all -- fetched
+        # separately over its "Web browser interface" control surface
+        # (see webremote.py). Polled rather than event-driven since nothing
+        # here tells us when a color changes.
+        while self._running:
+            try:
+                colors = webremote.fetch_track_colors(self.webremote_host, self.webremote_port)
+            except OSError:
+                colors = None
+            if colors is not None:
+                with self._lock:
+                    changed = colors != self._colors
+                    self._colors = colors
+                if changed:
+                    self._publish("tracks")
+            time.sleep(WEBREMOTE_POLL_INTERVAL)
 
     # -- OSC receive -----------------------------------------------------
 
@@ -207,7 +239,9 @@ class ReaperState:
     def get_tracks(self):
         with self._lock:
             items = sorted(self._tracks.items())
-        return [{"index": i, "name": n} for i, n in items if not _PLACEHOLDER_TRACK_NAME.match(n)]
+            colors = self._colors
+        return [{"index": i, "name": n, "color": colors.get(i)}
+                for i, n in items if not _PLACEHOLDER_TRACK_NAME.match(n)]
 
     def get_selected(self):
         with self._lock:

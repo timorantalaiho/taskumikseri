@@ -25,11 +25,20 @@ def main():
                          help="Interface to serve the web UI on (default: 0.0.0.0)")
     parser.add_argument("--http-port", type=int, default=8090,
                          help="Port to serve the web UI on (default: 8090)")
+    parser.add_argument("--webremote-host", default="127.0.0.1",
+                         help="IP of REAPER's \"Web browser interface\" control surface, used only "
+                              "to read track colors, which plain OSC feedback never includes "
+                              "(default: 127.0.0.1)")
+    parser.add_argument("--webremote-port", type=int, default=8080,
+                         help="Port of REAPER's \"Web browser interface\" control surface (Preferences "
+                              "> Control/OSC/web > Add... > Web browser interface). Set to 0 to skip "
+                              "track colors and not poll for them at all (default: 8080)")
     parser.add_argument("--debug", action="store_true",
                          help="Log select/receive OSC traffic to stdout")
     args = parser.parse_args()
 
-    state = ReaperState(args.reaper_host, args.reaper_port, listen_port=args.listen_port, debug=args.debug)
+    state = ReaperState(args.reaper_host, args.reaper_port, listen_port=args.listen_port, debug=args.debug,
+                         webremote_host=args.webremote_host, webremote_port=args.webremote_port)
 
     httpd = ThreadingHTTPServer((args.http_host, args.http_port), Handler)
     httpd.reaper_state = state

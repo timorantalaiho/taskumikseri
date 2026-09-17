@@ -44,6 +44,20 @@ time by default (`DEVICE_TRACK_COUNT`/`DEVICE_RECEIVE_COUNT` in
 OSC (`/device/track/count`, `/device/receive/count`), so there's nothing to
 configure for that.
 
+## Set up REAPER's web interface (optional, for track colors)
+
+OSC feedback never includes track color, so the web UI needs a second,
+separate control surface to color the track list to match REAPER's own
+track colors. Skip this section if you don't care about that -- everything
+else works without it.
+
+1. **Preferences > Control/OSC/web > Add... > Web browser interface**.
+2. Set its **port** (this is `--webremote-port` below, default `8080`).
+3. Make sure the device is enabled.
+
+The bridge polls this over plain HTTP (`http://127.0.0.1:8080/_/TRACK` by
+default) every few seconds -- no browser needs to actually be pointed at it.
+
 ## Run the bridge
 
 ```
@@ -83,6 +97,11 @@ and with REAPER itself.
   firewall blocking the chosen ports. Run the bridge with `--debug` to log
   the actual OSC traffic it sends/receives for select and receive-volume
   messages.
+- **Track list buttons have no color**: confirm REAPER's "Web browser
+  interface" device (see above) is added and enabled, and that its port
+  matches `--webremote-port`. This is separate from the OSC device and only
+  affects track colors -- everything else works without it. Tracks using
+  REAPER's default (non-custom) color are expected to show no color here too.
 - **Nothing responds at all, even after the above checks pass**: if REAPER's
   OSC device was ever flooded (e.g. a bug that hammered it with requests),
   it can end up in a stuck state that only REAPER itself can clear -- toggle
