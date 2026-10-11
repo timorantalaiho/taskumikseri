@@ -134,7 +134,11 @@
 
     if (!onFaders) {
       trackListEl.innerHTML = "";
-      state.tracks.forEach(function (t) {
+      // Only tracks with receives (e.g. monitor buses) have anything to ride here.
+      var mixTracks = state.tracks.filter(function (t) {
+        return (state.receives[t.index] || []).length > 0;
+      });
+      mixTracks.forEach(function (t) {
         var li = document.createElement("li");
         var btn = document.createElement("button");
         btn.textContent = t.name;
@@ -146,7 +150,7 @@
         li.appendChild(btn);
         trackListEl.appendChild(li);
       });
-      setStatus(state.tracks.length === 0 ? "Waiting for track list from REAPER..." : "");
+      setStatus(mixTracks.length === 0 ? "Waiting for tracks with receives from REAPER..." : "");
       return;
     }
 

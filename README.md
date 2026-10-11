@@ -16,8 +16,9 @@ that:
   REAPER-side scripting needed.
 - Advertises itself on the local network as `mix.local` (mDNS/Bonjour),
   so phones can find it without anyone looking up an IP address.
-- Serves a plain mobile web page: tap a track, then get one volume slider
-  per receive on that track. Each phone picks its own track (so every
+- Serves a plain mobile web page listing the tracks that have receives
+  (e.g. monitor buses): tap one, then get one volume slider per receive
+  on that track. Each phone picks its own track (so every
   performer can ride their own monitor bus at once), and never changes
   REAPER's track selection. Phones showing the same track stay in sync
   with each other, and with REAPER itself, live.
@@ -78,7 +79,8 @@ gig/session -- it's just a script, no build step or dependencies.
 2. Open `http://mix.local:8090/` (the name from `--mdns-name`, the port
    from `--http-port`). If that doesn't load, use the IP address the
    bridge prints on startup instead, e.g. `http://192.168.1.120:8090/`.
-3. Tap a track (e.g. "Jaakko Monitor Out") to see its receives. The
+3. Tap a track (e.g. "Jaakko Monitor Out") to see its receives. Only
+   tracks that have receives are listed. The
    phone remembers it across reloads (it's in the page URL, so a bookmark
    of it opens straight to that track).
 4. Drag a receive's slider to ride that performer's level in the monitor
