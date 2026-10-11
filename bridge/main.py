@@ -8,6 +8,7 @@ depends on.
 import argparse
 from http.server import ThreadingHTTPServer
 
+import mdns
 from reaper_state import ReaperState
 from server import Handler
 
@@ -33,8 +34,12 @@ def main():
                          help="Port of REAPER's \"Web browser interface\" control surface (Preferences "
                               "> Control/OSC/web > Add... > Web browser interface). Set to 0 to skip "
                               "track colors and not poll for them at all (default: 8080)")
+    parser.add_argument("--mdns-name", default="mix",
+                         help="Advertise the web UI on the local network as <name>.local via "
+                              "mDNS/Bonjour, e.g. http://mix.local:8090/. Set to an empty string "
+                              "to disable (default: mix)")
     parser.add_argument("--debug", action="store_true",
-                         help="Log select/receive OSC traffic to stdout")
+                         help="Log receive OSC traffic to stdout")
     args = parser.parse_args()
 
     state = ReaperState(args.reaper_host, args.reaper_port, listen_port=args.listen_port, debug=args.debug,
@@ -43,9 +48,18 @@ def main():
     httpd = ThreadingHTTPServer((args.http_host, args.http_port), Handler)
     httpd.reaper_state = state
 
+    responder = None
+    if args.mdns_name:
+        try:
+            responder = mdns.MdnsResponder(args.mdns_name)
+        except OSError as e:
+            print(f"Couldn't start mDNS responder for {args.mdns_name}.local: {e}")
+
     print(f"Listening for REAPER OSC feedback on UDP :{args.listen_port}, "
           f"sending control to {args.reaper_host}:{args.reaper_port}")
-    print(f"Web UI: http://<this-machine-ip>:{args.http_port}/")
+    if responder:
+        print(f"Web UI: http://{responder.fqdn}:{args.http_port}/")
+    print(f"Web UI: http://{mdns.default_ip() or '<this-machine-ip>'}:{args.http_port}/")
 
     try:
         httpd.serve_forever()
@@ -54,6 +68,8 @@ def main():
     finally:
         httpd.server_close()
         state.close()
+        if responder:
+            responder.close()
 
 
 if __name__ == "__main__":

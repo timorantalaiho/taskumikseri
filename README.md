@@ -14,6 +14,8 @@ that:
 - Talks OSC to REAPER, which already exposes per-receive volume for every
   track over its stock OSC control surface -- no ReaScript or other
   REAPER-side scripting needed.
+- Advertises itself on the local network as `mix.local` (mDNS/Bonjour),
+  so phones can find it without anyone looking up an IP address.
 - Serves a plain mobile web page: tap a track, then get one volume slider
   per receive on that track. Each phone picks its own track (so every
   performer can ride their own monitor bus at once), and never changes
@@ -73,7 +75,9 @@ gig/session -- it's just a script, no build step or dependencies.
 ## Use it from a phone
 
 1. Join the same Wi-Fi network as the machine running the bridge.
-2. Open `http://<computer-ip>:8090/` (the port from `--http-port`).
+2. Open `http://mix.local:8090/` (the name from `--mdns-name`, the port
+   from `--http-port`). If that doesn't load, use the IP address the
+   bridge prints on startup instead, e.g. `http://192.168.1.120:8090/`.
 3. Tap a track (e.g. "Jaakko Monitor Out") to see its receives. The
    phone remembers it across reloads (it's in the page URL, so a bookmark
    of it opens straight to that track).
@@ -101,6 +105,13 @@ again.
   address, and that phone and computer are on the same network with no
   firewall blocking the chosen ports. Run the bridge with `--debug` to log
   the actual receive OSC traffic it sends and gets back.
+- **`mix.local` doesn't load on a phone**: iPhones/iPads resolve `.local`
+  names out of the box, but some Android versions don't -- use the IP
+  address the bridge prints on startup instead. Also check that the
+  computer's firewall allows UDP port 5353 (mDNS) in, and that nothing
+  else on the network already calls itself `mix.local` (choose another
+  name with `--mdns-name`). Some guest/public Wi-Fi networks block
+  traffic between devices, including mDNS, entirely.
 - **Track list buttons have no color**: confirm REAPER's "Web browser
   interface" device (see above) is added and enabled, and that its port
   matches `--webremote-port`. This is separate from the OSC device and only
