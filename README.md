@@ -11,12 +11,14 @@ aren't addressable faders in either of those.
 `bridge/` is a Python 3 server (standard library only, no install step)
 that:
 
-- Talks OSC to REAPER, which already exposes per-receive volume for the
-  currently selected track over its stock OSC control surface -- no
-  ReaScript or other REAPER-side scripting needed.
-- Serves a plain mobile web page: tap a track to select it, then get one
-  volume slider per receive on that track. Multiple phones/tabs stay in
-  sync with each other, and with REAPER itself, live.
+- Talks OSC to REAPER, which already exposes per-receive volume for every
+  track over its stock OSC control surface -- no ReaScript or other
+  REAPER-side scripting needed.
+- Serves a plain mobile web page: tap a track, then get one volume slider
+  per receive on that track. Each phone picks its own track (so every
+  performer can ride their own monitor bus at once), and never changes
+  REAPER's track selection. Phones showing the same track stay in sync
+  with each other, and with REAPER itself, live.
 
 ## Requirements
 
@@ -72,13 +74,16 @@ gig/session -- it's just a script, no build step or dependencies.
 
 1. Join the same Wi-Fi network as the machine running the bridge.
 2. Open `http://<computer-ip>:8090/` (the port from `--http-port`).
-3. Tap a track (e.g. "Jaakko Monitor Out") to select it in REAPER and see
-   its receives.
+3. Tap a track (e.g. "Jaakko Monitor Out") to see its receives. The
+   phone remembers it across reloads (it's in the page URL, so a bookmark
+   of it opens straight to that track).
 4. Drag a receive's slider to ride that performer's level in the monitor
    mix. The number next to each slider is REAPER's own dB readout.
 
-Multiple phones/tabs can be open at once and stay in sync with each other
-and with REAPER itself.
+Multiple phones/tabs can be open at once, each on its own track, and stay
+in sync with each other and with REAPER itself. If the Wi-Fi drops or the
+phone sleeps, the page reconnects on its own once it can reach the bridge
+again.
 
 ## Troubleshooting
 
@@ -89,14 +94,13 @@ and with REAPER itself.
   bridge**: REAPER only sends feedback for what changed, so an
   already-running REAPER won't re-announce tracks it already told a
   previous OSC listener about. The bridge asks REAPER to resend everything
-  on startup, which can take a couple of seconds for a large project --
-  give it a moment and reload the page.
+  on startup, which REAPER paces out over roughly 10 seconds -- tracks
+  appear in the page as they arrive.
 - **Sliders don't move REAPER's levels**: confirm the bridge's
   `--reaper-host`/`--reaper-port` match REAPER's OSC device's listen
   address, and that phone and computer are on the same network with no
   firewall blocking the chosen ports. Run the bridge with `--debug` to log
-  the actual OSC traffic it sends/receives for select and receive-volume
-  messages.
+  the actual receive OSC traffic it sends and gets back.
 - **Track list buttons have no color**: confirm REAPER's "Web browser
   interface" device (see above) is added and enabled, and that its port
   matches `--webremote-port`. This is separate from the OSC device and only

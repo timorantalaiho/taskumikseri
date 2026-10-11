@@ -84,11 +84,12 @@
 (function () {
   "use strict";
 
-  var state = { tracks: [], selected: null, receives: [] };
-  var autoAdoptSelected = true; // adopt REAPER's current selection once on load, then stop
+  // Which track's receives this phone shows is this phone's own choice (kept
+  // in the URL hash, so it survives reloads and the phone's back gesture
+  // returns to the track list) -- never REAPER's selection.
+  var state = { tracks: [], receives: {}, view: null }; // receives: track index -> [..]
   var interacting = new Set();
-  var lastSent = new Map();
-  var SEND_INTERVAL_MS = 50;
+  var connected = false;
 
   var trackListEl = document.getElementById("trackList");
   var receivesEl = document.getElementById("receives");
@@ -116,15 +117,20 @@
     return luminance > 0.5 ? "#111" : "#eee";
   }
 
+  function setStatus(text) {
+    statusEl.textContent = connected ? text
+      : lastMessageAt ? "Disconnected from bridge, reconnecting..." : "Connecting...";
+  }
+
   function render() {
-    var onFaders = state.selected !== null;
+    var onFaders = state.view !== null;
     trackListEl.hidden = onFaders;
     receivesEl.hidden = !onFaders;
     backBtn.hidden = !onFaders;
-    titleEl.textContent = onFaders ? trackName(state.selected) : "Monitor Mix";
+    titleEl.textContent = onFaders ? trackName(state.view) : "Monitor Mix";
 
-    var selectedTrack = onFaders ? findTrack(state.selected) : null;
-    headerEl.style.borderLeftColor = (selectedTrack && selectedTrack.color) || "transparent";
+    var viewedTrack = onFaders ? findTrack(state.view) : null;
+    headerEl.style.borderLeftColor = (viewedTrack && viewedTrack.color) || "transparent";
 
     if (!onFaders) {
       trackListEl.innerHTML = "";
@@ -136,25 +142,19 @@
           btn.style.background = t.color;
           btn.style.color = readableTextColor(t.color);
         }
-        btn.addEventListener("click", function () { selectTrack(t.index); });
+        btn.addEventListener("click", function () { location.hash = String(t.index); });
         li.appendChild(btn);
         trackListEl.appendChild(li);
       });
-      if (state.tracks.length === 0) {
-        statusEl.textContent = "Waiting for track list from REAPER...";
-      } else {
-        statusEl.textContent = "";
-      }
+      setStatus(state.tracks.length === 0 ? "Waiting for track list from REAPER..." : "");
       return;
     }
 
-    if (state.receives.length === 0) {
-      statusEl.textContent = "Waiting for receives from REAPER...";
-    } else {
-      statusEl.textContent = "";
-    }
+    var track = state.view;
+    var receives = state.receives[track] || [];
+    setStatus(receives.length === 0 ? "No receives on this track (yet)." : "");
 
-    state.receives.forEach(function (r) {
+    receives.forEach(function (r) {
       var row = receiveRowsEl.querySelector('[data-index="' + r.index + '"]');
       if (!row) {
         row = document.createElement("div");
@@ -164,14 +164,19 @@
           '<div class="name"></div><div class="value"></div>' +
           '<input type="range" min="0" max="1" step="0.001">';
         var input = row.querySelector("input");
+        var releaseTimer = null;
         input.addEventListener("input", function () {
+          clearTimeout(releaseTimer);
           interacting.add(r.index);
-          maybeSendVolume(r.index, parseFloat(input.value));
+          sendVolume(track, r.index, parseFloat(input.value));
         });
         ["pointerup", "mouseup", "touchend", "touchcancel"].forEach(function (evt) {
           input.addEventListener(evt, function () {
-            sendVolume(r.index, parseFloat(input.value));
-            interacting.delete(r.index);
+            sendVolume(track, r.index, parseFloat(input.value));
+            // Hold off on adopting REAPER's value briefly, so feedback for
+            // values sent mid-drag can't flick the slider back after release.
+            clearTimeout(releaseTimer);
+            releaseTimer = setTimeout(function () { interacting.delete(r.index); render(); }, 500);
           });
         });
         receiveRowsEl.appendChild(row);
@@ -183,68 +188,104 @@
       }
     });
 
-    // Drop rows for receives that disappeared (e.g. after switching tracks).
+    // Drop rows for receives that disappeared.
     Array.prototype.slice.call(receiveRowsEl.children).forEach(function (row) {
       var idx = parseInt(row.dataset.index, 10);
-      if (!state.receives.some(function (r) { return r.index === idx; })) {
+      if (!receives.some(function (r) { return r.index === idx; })) {
         row.remove();
       }
     });
   }
 
-  function maybeSendVolume(index, value) {
-    var now = Date.now();
-    var last = lastSent.get(index) || 0;
-    if (now - last >= SEND_INTERVAL_MS) {
-      sendVolume(index, value);
-    }
+  // At most one request in flight per receive, always carrying the latest
+  // value: parallel requests could reach the bridge out of order and leave
+  // REAPER at an older level than where the slider was released.
+  var pendingVolume = new Map();
+  var inFlight = new Set();
+
+  function sendVolume(track, index, value) {
+    var key = track + "/" + index;
+    pendingVolume.set(key, { track: track, index: index, value: value });
+    if (!inFlight.has(key)) flushVolume(key);
   }
 
-  function sendVolume(index, value) {
-    lastSent.set(index, Date.now());
+  function flushVolume(key) {
+    var body = pendingVolume.get(key);
+    pendingVolume.delete(key);
+    inFlight.add(key);
     fetch("/api/receive/volume", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ index: index, value: value }),
+      body: JSON.stringify(body),
+    }).catch(function () {
+      // Bridge unreachable -- the event stream's reconnect logic reports it.
+    }).then(function () {
+      inFlight.delete(key);
+      if (pendingVolume.has(key)) flushVolume(key);
     });
   }
 
-  function selectTrack(index) {
-    state.selected = index;
-    state.receives = [];
-    receiveRowsEl.innerHTML = "";
+  function showView() {
+    var n = parseInt(location.hash.slice(1), 10);
+    var view = isNaN(n) ? null : n;
+    if (view !== state.view) {
+      state.view = view;
+      interacting.clear();
+      receiveRowsEl.innerHTML = "";
+    }
     render();
-    fetch("/api/select", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ index: index }),
-    });
   }
 
   backBtn.addEventListener("click", function () {
-    state.selected = null;
-    state.receives = [];
-    autoAdoptSelected = false;
-    receiveRowsEl.innerHTML = "";
-    render();
+    history.replaceState(null, "", location.pathname);
+    showView();
   });
+  window.addEventListener("hashchange", showView);
+
+  // EventSource retries on its own, but not reliably after a phone sleeps or
+  // switches networks -- so also watch for silence (the bridge sends a ping
+  // at least every 10s) and reconnect from scratch.
+  var STALE_MS = 25000;
+  var es = null;
+  var lastMessageAt = 0;
 
   function connect() {
-    var es = new EventSource("/api/events");
+    if (es) es.close();
+    if (lastMessageAt) lastMessageAt = Date.now(); // restart the stale timer, not on first connect
+    es = new EventSource("/api/events");
+    es.onopen = function () {
+      connected = true;
+      render();
+    };
     es.onmessage = function (ev) {
+      lastMessageAt = Date.now();
+      connected = true;
       var msg = JSON.parse(ev.data);
       if (msg.type === "tracks") state.tracks = msg.tracks;
-      else if (msg.type === "selected") {
-        if (autoAdoptSelected && state.selected === null) state.selected = msg.selected;
-      } else if (msg.type === "receives") state.receives = msg.receives;
+      else if (msg.type === "receives") state.receives[msg.track] = msg.receives;
+      else return; // ping
       render();
     };
     es.onerror = function () {
-      statusEl.textContent = "Disconnected, retrying...";
+      connected = false;
+      render();
+      if (es.readyState === EventSource.CLOSED) setTimeout(connect, 2000);
     };
   }
 
-  render();
+  setInterval(function () {
+    if (Date.now() - lastMessageAt > STALE_MS) {
+      connected = false;
+      render();
+      connect();
+    }
+  }, 5000);
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && Date.now() - lastMessageAt > 12000) connect();
+  });
+
+  showView();
   connect();
 })();
 </script>
