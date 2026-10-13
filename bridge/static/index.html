@@ -25,13 +25,21 @@
     top: 0;
   }
   header h1 { font-size: 1.1rem; margin: 0; flex: 1; }
-  button.back {
+  button.back, button.lock {
     background: none;
     border: 1px solid #444;
     color: #eee;
     border-radius: 8px;
     padding: 0.5rem 0.9rem;
     font-size: 1rem;
+  }
+  button.lock { min-width: 7.5rem; }
+  button.lock.unlocked { background: #e8a33d; border-color: #e8a33d; color: #111; font-weight: 600; }
+  button.lock.nudge { animation: nudge 0.5s ease-in-out 2; }
+  @keyframes nudge {
+    0%, 100% { transform: none; }
+    25% { transform: translateX(-5px); border-color: #e8a33d; }
+    75% { transform: translateX(5px); border-color: #e8a33d; }
   }
   #status { padding: 0.5rem 1rem; color: #888; font-size: 0.85rem; }
   #trackList { list-style: none; margin: 0; padding: 0.5rem; }
@@ -64,10 +72,11 @@
     grid-column: 1 / span 2;
     height: 3.5rem;
     padding: 0 1.25rem;  /* room for the thumb at either end */
-    touch-action: pan-y;  /* vertical swipes still scroll the page */
+    touch-action: pan-y;  /* locked: vertical swipes scroll the page */
     user-select: none;
     -webkit-user-select: none;
   }
+  body.unlocked .fader { touch-action: none; }  /* unlocked: every touch drags */
   .fader .rail { position: relative; height: 100%; }
   .fader .groove, .fader .fill {
     position: absolute; left: 0; top: 50%; height: 0.6rem; margin-top: -0.3rem; border-radius: 0.3rem;
@@ -83,6 +92,8 @@
     transition: transform 0.1s;
   }
   .fader.dragging .thumb { transform: scale(1.15); background: #fff; }
+  body:not(.unlocked) .fader { opacity: 0.4; }
+  body:not(.unlocked) .fader .fill { background: #8a96a8; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -90,6 +101,7 @@
 <header>
   <button class="back" id="backBtn" hidden>&larr;</button>
   <h1 id="title">Monitor Mix</h1>
+  <button class="lock" id="lockBtn" hidden aria-pressed="false"></button>
 </header>
 <div id="status"></div>
 
@@ -117,6 +129,31 @@
   var backBtn = document.getElementById("backBtn");
   var statusEl = document.getElementById("status");
   var headerEl = document.querySelector("header");
+  var lockBtn = document.getElementById("lockBtn");
+
+  // Sliders start locked (and re-lock on every track change), so scrolling
+  // or a stray touch can't change anyone's monitor level by accident.
+  var locked = true;
+
+  function setLocked(value) {
+    locked = value;
+    document.body.classList.toggle("unlocked", !locked);
+    lockBtn.classList.toggle("unlocked", !locked);
+    lockBtn.setAttribute("aria-pressed", String(!locked));
+    lockBtn.textContent = locked ? "\uD83D\uDD12 Locked" : "\uD83D\uDD13 Unlocked";
+  }
+
+  lockBtn.addEventListener("click", function () {
+    setLocked(!locked);
+    render(); // clears any "sliders are locked" hint
+  });
+
+  function nudgeLock() {
+    statusEl.textContent = "Sliders are locked \u2013 tap the lock button to unlock.";
+    lockBtn.classList.remove("nudge");
+    void lockBtn.offsetWidth; // restart the animation
+    lockBtn.classList.add("nudge");
+  }
 
   function findTrack(index) {
     return state.tracks.find(function (t) { return t.index === index; });
@@ -146,6 +183,7 @@
     trackListEl.hidden = onFaders;
     receivesEl.hidden = !onFaders;
     backBtn.hidden = !onFaders;
+    lockBtn.hidden = !onFaders;
     titleEl.textContent = onFaders ? trackName(state.view) : "Monitor Mix";
 
     var viewedTrack = onFaders ? findTrack(state.view) : null;
@@ -241,6 +279,11 @@
 
     fader.addEventListener("pointerdown", function (e) {
       if (e.button !== 0) return;
+      if (locked) {
+        // A tap (not a scroll, which cancels the pointer) on a locked fader.
+        drag = { id: e.pointerId, lockedTap: true };
+        return;
+      }
       e.preventDefault();
       fader.setPointerCapture(e.pointerId);
       clearTimeout(releaseTimer);
@@ -251,16 +294,21 @@
     });
 
     fader.addEventListener("pointermove", function (e) {
-      if (!drag || e.pointerId !== drag.id) return;
+      if (!drag || drag.lockedTap || e.pointerId !== drag.id) return;
       change(drag.startValue + (e.clientX - drag.startX) / drag.width);
     });
 
     function end(e) {
       if (!drag || e.pointerId !== drag.id) return;
+      var wasTap = drag.lockedTap && e.type === "pointerup";
+      var wasDrag = !drag.lockedTap;
       drag = null;
-      fader.classList.remove("dragging");
-      sendVolume(track, index, row.faderValue);
-      release();
+      if (wasTap) nudgeLock();
+      if (wasDrag) {
+        fader.classList.remove("dragging");
+        sendVolume(track, index, row.faderValue);
+        release();
+      }
     }
     fader.addEventListener("pointerup", end);
     fader.addEventListener("pointercancel", end);
@@ -270,6 +318,7 @@
       var step = { ArrowLeft: -0.01, ArrowDown: -0.01, ArrowRight: 0.01, ArrowUp: 0.01 }[e.key];
       if (step === undefined) return;
       e.preventDefault();
+      if (locked) { nudgeLock(); return; }
       clearTimeout(releaseTimer);
       interacting.add(index);
       change((row.faderValue || 0) + step);
@@ -310,6 +359,7 @@
     var view = isNaN(n) ? null : n;
     if (view !== state.view) {
       state.view = view;
+      setLocked(true);
       interacting.clear();
       receiveRowsEl.innerHTML = "";
     }
@@ -365,6 +415,7 @@
     if (document.visibilityState === "visible" && Date.now() - lastMessageAt > 12000) connect();
   });
 
+  setLocked(true);
   showView();
   connect();
 })();
