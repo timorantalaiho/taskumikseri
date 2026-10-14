@@ -114,6 +114,27 @@ again.
   else on the network already calls itself `mix.local` (choose another
   name with `--mdns-name`). Some guest/public Wi-Fi networks block
   traffic between devices, including mDNS, entirely.
+- **`mix.local` doesn't resolve when the bridge runs on a Mac**: the
+  bridge's built-in mDNS responder doesn't work reliably on macOS. Turn it
+  off:
+
+  ```
+  python3 bridge/main.py --mdns-name ""
+  ```
+
+  and have macOS's own Bonjour daemon publish the name instead, by running
+  this in a second Terminal window for as long as the bridge runs:
+
+  ```
+  dns-sd -P "Monitor Mix" _http._tcp local 8090 mix.local "$(ipconfig getifaddr en0)"
+  ```
+
+  `ipconfig getifaddr en0` prints the Mac's Wi-Fi address (use the
+  Ethernet interface's name instead if it's wired, e.g. `en1`), and `8090`
+  is the bridge's `--http-port`. Stop `dns-sd` with Ctrl+C to unpublish
+  the name. Turning off the built-in responder matters: when it answers
+  for `mix.local` too, Bonjour sees a name conflict and renames its record
+  (e.g. to `mix-2.local`).
 - **Track list buttons have no color**: confirm REAPER's "Web browser
   interface" device (see above) is added and enabled, and that its port
   matches `--webremote-port`. This is separate from the OSC device and only
