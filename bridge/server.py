@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from http.server import BaseHTTPRequestHandler
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -22,12 +23,21 @@ class Handler(BaseHTTPRequestHandler):
     def state(self):
         return self.server.reaper_state
 
+    @property
+    def route(self):
+        """The request path without query string, repeated or trailing
+        slashes -- so e.g. /index.html/, /api/tracks/ and /?from=qr all
+        work like their plain forms."""
+        path = re.sub(r"/+", "/", self.path.partition("?")[0]).rstrip("/")
+        return path or "/"
+
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        route = self.route
+        if route in ("/", "/index.html"):
             self._serve_file("index.html", "text/html; charset=utf-8")
-        elif self.path == "/api/tracks":
+        elif route == "/api/tracks":
             self._send_json({"tracks": self.state.get_tracks()})
-        elif self.path == "/api/events":
+        elif route == "/api/events":
             self._serve_events()
         else:
             self.send_error(404)
@@ -35,7 +45,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             body = self._read_json_body()
-            if self.path == "/api/receive/volume":
+            if self.route == "/api/receive/volume":
                 args = int(body["track"]), int(body["index"]), float(body["value"])
             else:
                 self.send_error(404)
