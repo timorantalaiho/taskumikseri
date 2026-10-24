@@ -36,12 +36,17 @@ that:
 Do this once per machine, in **Preferences > Control/OSC/web**.
 
 1. **Add... > OSC (Open Sound Control)**.
-2. Set the device's **listen port** (the port REAPER receives commands on --
-   this is `--reaper-port` below, default `8000`).
-3. Set the **feedback IP/port** to the machine and port the bridge listens
-   on (`--listen-port` below, default `9000`; use `127.0.0.1` if the bridge
-   runs on the same machine as REAPER).
-4. Make sure the device is enabled (not just added).
+2. Set **Mode** to **Configure device IP + local port**. The bridge needs
+   both directions: it sends commands to REAPER and listens for REAPER's
+   feedback. The other modes are one-way only ("Local port" only receives,
+   "Device IP+port" only sends), and the bridge won't work with either.
+3. Set **Local listen port** to the port REAPER receives commands on --
+   this is `--reaper-port` below, default `8000`.
+4. Set **Device IP** and **Device port** to where REAPER sends its
+   feedback: the machine and port the bridge listens on (`--listen-port`
+   below, default `9000`; use `127.0.0.1` if the bridge runs on the same
+   machine as REAPER).
+5. Make sure the device is enabled (not just added).
 
 REAPER's OSC surfaces only address 8 tracks and 4 receives per track at a
 time by default (`DEVICE_TRACK_COUNT`/`DEVICE_RECEIVE_COUNT` in
@@ -93,9 +98,11 @@ again.
 
 ## Troubleshooting
 
-- **Web UI shows no tracks**: confirm the bridge's `--listen-port` matches
-  the feedback port configured in REAPER's OSC device, and that the OSC
-  device is enabled (not just added) in Preferences.
+- **Web UI shows no tracks**: confirm REAPER's OSC device's **Mode** is
+  **Configure device IP + local port** (the one-way modes never send
+  feedback to the bridge), that its **Device port** matches the bridge's
+  `--listen-port`, and that the OSC device is enabled (not just added) in
+  Preferences.
 - **Track list or receives are incomplete right after starting the
   bridge**: REAPER only sends feedback for what changed, so an
   already-running REAPER won't re-announce tracks it already told a
