@@ -71,12 +71,30 @@ default) every few seconds -- no browser needs to actually be pointed at it.
 ## Run the bridge
 
 ```
-python3 bridge/main.py --reaper-host 127.0.0.1 --reaper-port 8000 --listen-port 9000 --http-port 8090
+git clone https://github.com/timorantalaiho/taskumikseri.git
+cd taskumikseri
+./run.sh
 ```
 
-All flags have the defaults shown above; run `python3 bridge/main.py --help`
-for the full list. Leave this running for the duration of the
-gig/session -- it's just a script, no build step or dependencies.
+That's it on both Linux and macOS -- no build step or dependencies
+beyond Python 3. Leave it running for the duration of the gig/session,
+and stop it with Ctrl+C.
+
+`run.sh` passes any flags on to the bridge, e.g.:
+
+```
+./run.sh --reaper-host 127.0.0.1 --reaper-port 8000 --listen-port 9000 --http-port 8090
+```
+
+All flags have the defaults shown above; run `./run.sh --help` for the
+full list.
+
+On Linux, the bridge publishes `mix.local` itself. On macOS, its built-in
+mDNS responder doesn't work reliably, so `run.sh` turns it off and has
+macOS's own Bonjour daemon publish the name instead (with `dns-sd`,
+running in the background for as long as the bridge does). You can also
+start the bridge directly with `python3 bridge/main.py` -- on Linux that's
+equivalent.
 
 ## Use it from a phone
 
@@ -121,27 +139,14 @@ again.
   else on the network already calls itself `mix.local` (choose another
   name with `--mdns-name`). Some guest/public Wi-Fi networks block
   traffic between devices, including mDNS, entirely.
-- **`mix.local` doesn't resolve when the bridge runs on a Mac**: the
-  bridge's built-in mDNS responder doesn't work reliably on macOS. Turn it
-  off:
-
-  ```
-  python3 bridge/main.py --mdns-name ""
-  ```
-
-  and have macOS's own Bonjour daemon publish the name instead, by running
-  this in a second Terminal window for as long as the bridge runs:
-
-  ```
-  dns-sd -P "Monitor Mix" _http._tcp local 8090 mix.local "$(ipconfig getifaddr en0)"
-  ```
-
-  `ipconfig getifaddr en0` prints the Mac's Wi-Fi address (use the
-  Ethernet interface's name instead if it's wired, e.g. `en1`), and `8090`
-  is the bridge's `--http-port`. Stop `dns-sd` with Ctrl+C to unpublish
-  the name. Turning off the built-in responder matters: when it answers
-  for `mix.local` too, Bonjour sees a name conflict and renames its record
-  (e.g. to `mix-2.local`).
+- **`mix.local` doesn't resolve when the bridge runs on a Mac**: start
+  it with `./run.sh`, not `python3 bridge/main.py` -- see "Run the bridge"
+  above. `run.sh` publishes the address of the Mac's Wi-Fi/Ethernet
+  connection (skipping VPN tunnels) and prints it on startup; check that
+  it's on the same network as the phone. Running the bridge's built-in
+  responder alongside it (e.g. `python3 bridge/main.py` in another
+  window) makes Bonjour see a name conflict and rename its record (e.g. to
+  `mix-2.local`).
 - **Track list buttons have no color**: confirm REAPER's "Web browser
   interface" device (see above) is added and enabled, and that its port
   matches `--webremote-port`. This is separate from the OSC device and only
